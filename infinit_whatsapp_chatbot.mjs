@@ -4,7 +4,7 @@
  * Horário: 09:00 - 18:00
  */
 
-import fetch from 'node-fetch';
+import https from 'https';
 
 const BUSINESS_HOURS = {
   start: 9,
@@ -24,60 +24,110 @@ function isStoreOpen() {
   return hours >= BUSINESS_HOURS.start && hours < BUSINESS_HOURS.end;
 }
 
-async function identifyPhoneModel(imageUrl) {
-  try {
-    const response = await fetch('https://api.manus.im/llm/chat', {
+async function callMausAPI(messages, responseFormat = null) {
+  return new Promise((resolve, reject) => {
+    const apiKey = process.env.MANUS_API_KEY;
+    
+    if (!apiKey) {
+      console.error('❌ MANUS_API_KEY não configurada');
+      resolve(null);
+      return;
+    }
+
+    const body = JSON.stringify({
+      messages,
+      ...(responseFormat && { response_format: responseFormat }),
+    });
+
+    const options = {
+      hostname: 'api.manus.im',
+      port: 443,
+      path: '/llm/chat',
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${process.env.MANUS_API_KEY}`,
+        'Content-Length': body.length,
+        'Authorization': `Bearer ${apiKey}`,
       },
-      body: JSON.stringify({
-        messages: [
-          {
-            role: 'system',
-            content: 'Você é um especialista em identificação de modelos de celulares. Analise a imagem da parte traseira do celular e identifique: marca, linha, modelo específico e confiança (0-1 ). Responda em JSON com os campos: brand, line, model, confidence, features.',
-          },
-          {
-            role: 'user',
-            content: [
-              {
-                type: 'text',
-                text: 'Por favor, identifique este modelo de celular pela foto da parte traseira.',
-              },
-              {
-                type: 'image_url',
-                image_url: {
-                  url: imageUrl,
-                  detail: 'high',
-                },
-              },
-            ],
-          },
-        ],
-        response_format: {
-          type: 'json_schema',
-          json_schema: {
-            name: 'phone_identification',
-            strict: true,
-            schema: {
-              type: 'object',
-              properties: {
-                brand: { type: 'string' },
-                line: { type: 'string' },
-                model: { type: 'string' },
-                confidence: { type: 'number' },
-                features: { type: 'string' },
-              },
-              required: ['brand', 'line', 'model', 'confidence', 'features'],
-            },
-          },
-        },
-      }),
+    };
+
+    const req = https.request(options, (res) => {
+      let data = '';
+
+      res.on('data', (chunk) => {
+        data += chunk;
+      });
+
+      res.on('end', () => {
+        try {
+          const result = JSON.parse(data);
+          resolve(result);
+        } catch (error) {
+          console.error('Erro ao parsear resposta:', error);
+          resolve(null);
+        }
+      });
     });
 
-    const data = await response.json();
-    return JSON.parse(data.choices[0].message.content);
+    req.on('error', (error) => {
+      console.error('Erro na requisição:', error);
+      reject(error);
+    });
+
+    req.write(body);
+    req.end();
+  });
+}
+
+async function identifyPhoneModel(imageUrl) {
+  try {
+    const response = await callMausAPI(
+      [
+        {
+          role: 'system',
+          content: 'Você é um especialista em identificação de modelos de celulares. Analise a imagem da parte traseira do celular e identifique: marca, linha, modelo específico e confiança (0-1). Responda em JSON com os campos: brand, line, model, confidence, features.',
+        },
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'text',
+              text: 'Por favor, identifique este modelo de celular pela foto da parte traseira.',
+            },
+            {
+              type: 'image_url',
+              image_url: {
+                url: imageUrl,
+                detail: 'high',
+              },
+            },
+          ],
+        },
+      ],
+      {
+        type: 'json_schema',
+        json_schema: {
+          name: 'phone_identification',
+          strict: true,
+          schema: {
+            type: 'object',
+            properties: {
+              brand: { type: 'string' },
+              line: { type: 'string' },
+              model: { type: 'string' },
+              confidence: { type: 'number' },
+              features: { type: 'string' },
+            },
+            required: ['brand', 'line', 'model', 'confidence', 'features'],
+          },
+        },
+      }
+    );
+
+    if (response?.choices?.[0]?.message?.content) {
+      return JSON.parse(response.choices[0].message.content);
+    }
+    return null;
   } catch (error) {
     console.error('Erro ao identificar modelo:', error);
     return null;
@@ -102,47 +152,42 @@ async function analyzeProblem(description, imageUrl = null) {
         ]
       : `Cliente relata o seguinte problema: "${description}"\n\nIdentifique os possíveis problemas baseado na descrição. Responda em JSON com: problems (array), severity (baixa/média/alta), recommendation (string).`;
 
-    const response = await fetch('https://api.manus.im/llm/chat', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${process.env.MANUS_API_KEY}`,
-      },
-      body: JSON.stringify({
-        messages: [
-          {
-            role: 'system',
-            content: 'Você é um técnico especialista em celulares. Analise os problemas relatados e forneça uma triagem profissional. Seja conciso e prático.',
-          },
-          {
-            role: 'user',
-            content: messageContent,
-          },
-        ],
-        response_format: {
-          type: 'json_schema',
-          json_schema: {
-            name: 'problem_analysis',
-            strict: true,
-            schema: {
-              type: 'object',
-              properties: {
-                problems: {
-                  type: 'array',
-                  items: { type: 'string' },
-                },
-                severity: { type: 'string', enum: ['baixa', 'média', 'alta'] },
-                recommendation: { type: 'string' },
+    const response = await callMausAPI(
+      [
+        {
+          role: 'system',
+          content: 'Você é um técnico especialista em celulares. Analise os problemas relatados e forneça uma triagem profissional. Seja conciso e prático.',
+        },
+        {
+          role: 'user',
+          content: messageContent,
+        },
+      ],
+      {
+        type: 'json_schema',
+        json_schema: {
+          name: 'problem_analysis',
+          strict: true,
+          schema: {
+            type: 'object',
+            properties: {
+              problems: {
+                type: 'array',
+                items: { type: 'string' },
               },
-              required: ['problems', 'severity', 'recommendation'],
+              severity: { type: 'string', enum: ['baixa', 'média', 'alta'] },
+              recommendation: { type: 'string' },
             },
+            required: ['problems', 'severity', 'recommendation'],
           },
         },
-      } ),
-    });
+      }
+    );
 
-    const data = await response.json();
-    return JSON.parse(data.choices[0].message.content);
+    if (response?.choices?.[0]?.message?.content) {
+      return JSON.parse(response.choices[0].message.content);
+    }
+    return null;
   } catch (error) {
     console.error('Erro ao analisar problema:', error);
     return null;
@@ -151,28 +196,21 @@ async function analyzeProblem(description, imageUrl = null) {
 
 async function generateTriageResponse(phoneModel, problemAnalysis) {
   try {
-    const response = await fetch('https://api.manus.im/llm/chat', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${process.env.MANUS_API_KEY}`,
+    const response = await callMausAPI([
+      {
+        role: 'system',
+        content: `Você é um atendente da ${STORE_NAME}. Gere uma resposta profissional e amigável para o cliente baseado na triagem. Seja conciso (máximo 3 linhas). Inclua próximos passos.`,
       },
-      body: JSON.stringify({
-        messages: [
-          {
-            role: 'system',
-            content: `Você é um atendente da ${STORE_NAME}. Gere uma resposta profissional e amigável para o cliente baseado na triagem. Seja conciso (máximo 3 linhas ). Inclua próximos passos.`,
-          },
-          {
-            role: 'user',
-            content: `Modelo identificado: ${phoneModel.brand} ${phoneModel.line} ${phoneModel.model}\nProblemas: ${problemAnalysis.problems.join(', ')}\nSeveridade: ${problemAnalysis.severity}\nRecomendação: ${problemAnalysis.recommendation}\n\nGere uma resposta de triagem para o cliente.`,
-          },
-        ],
-      }),
-    });
+      {
+        role: 'user',
+        content: `Modelo identificado: ${phoneModel.brand} ${phoneModel.line} ${phoneModel.model}\nProblemas: ${problemAnalysis.problems.join(', ')}\nSeveridade: ${problemAnalysis.severity}\nRecomendação: ${problemAnalysis.recommendation}\n\nGere uma resposta de triagem para o cliente.`,
+      },
+    ]);
 
-    const data = await response.json();
-    return data.choices[0].message.content;
+    if (response?.choices?.[0]?.message?.content) {
+      return response.choices[0].message.content;
+    }
+    return 'Desculpe, houve um erro ao processar sua solicitação. Por favor, tente novamente.';
   } catch (error) {
     console.error('Erro ao gerar resposta:', error);
     return 'Desculpe, houve um erro ao processar sua solicitação. Por favor, tente novamente.';
