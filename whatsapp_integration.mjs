@@ -1,215 +1,266 @@
-/**
- * Servidor Web + Chatbot IA
- * Integração com WhatsApp Business API
- */
-
 import express from 'express';
-import https from 'https';
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
-import { processMessage, isStoreOpen } from './infinit_whatsapp_chatbot_corrigido.mjs';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
-app.use(express.static(__dirname));
 
-const WHATSAPP_BUSINESS_ACCOUNT_ID = process.env.WHATSAPP_BUSINESS_ACCOUNT_ID;
-const WHATSAPP_API_TOKEN = process.env.WHATSAPP_API_TOKEN;
-const WEBHOOK_VERIFY_TOKEN = process.env.WEBHOOK_VERIFY_TOKEN || 'infinit_celulares_2024';
-
-/**
- * Serve a página principal
- */
+// Serve a página HTML
 app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, 'index.html'));
-});
-
-/**
- * Webhook GET - Verificação do WhatsApp
- */
-app.get('/webhook', (req, res) => {
-  const mode = req.query['hub.mode'];
-  const token = req.query['hub.verify_token'];
-  const challenge = req.query['hub.challenge'];
-
-  if (mode === 'subscribe' && token === WEBHOOK_VERIFY_TOKEN) {
-    console.log('✅ Webhook verificado com sucesso');
-    res.status(200).send(challenge);
-  } else {
-    res.sendStatus(403);
-  }
-});
-
-/**
- * Webhook POST - Receber mensagens do WhatsApp
- */
-app.post('/webhook', async (req, res) => {
-  const body = req.body;
-
-  if (body.object === 'whatsapp_business_account') {
-    const entry = body.entry?.[0];
-    const changes = entry?.changes?.[0];
-    const value = changes?.value;
-
-    if (value?.messages) {
-      const message = value.messages[0];
-      const sender = message.from;
-
-      console.log(`📨 Mensagem recebida de ${sender}`);
-
-      if (message.type === 'text') {
-        const response = await processMessage(message.text.body);
-        await sendWhatsAppMessage(sender, response);
-      } else if (message.type === 'image') {
-        const response = await processMessage(
-          message.image.caption || 'Analisando imagem do celular',
-          message.image.link
-        );
-        await sendWhatsAppMessage(sender, response);
-      }
-    }
-
-    res.status(200).send('EVENT_RECEIVED');
-  } else {
-    res.sendStatus(404);
-  }
-});
-
-/**
- * API para chat web
- */
-app.post('/api/chat', async (req, res) => {
-  try {
-    const { message } = req.body;
-
-    if (!message) {
-      return res.json({ success: false, error: 'Mensagem vazia' });
-    }
-
-    const response = await processMessage(message);
-
-    res.json({
-      success: true,
-      response: response
-    });
-  } catch (error) {
-    console.error('Erro no chat:', error);
-    res.json({
-      success: false,
-      error: 'Erro ao processar mensagem'
-    });
-  }
-});
-
-/**
- * API para análise de imagem
- */
-app.post('/api/analyze-image', async (req, res) => {
-  try {
-    // Como estamos em ambiente web, vamos processar como descrição
-    const response = await processMessage('Analisando imagem do celular para identificação de modelo e problemas');
-
-    res.json({
-      success: true,
-      response: response
-    });
-  } catch (error) {
-    console.error('Erro ao analisar imagem:', error);
-    res.json({
-      success: false,
-      error: 'Erro ao analisar imagem'
-    });
-  }
-});
-
-/**
- * Health check
- */
-app.get('/health', (req, res) => {
-  res.json({
-    status: 'ok',
-    store: 'Infinit Celulares',
-    storeOpen: isStoreOpen(),
-    timestamp: new Date().toISOString(),
-  });
-});
-
-/**
- * Envia mensagem via WhatsApp Business API
- */
-async function sendWhatsAppMessage(recipientPhone, messageText) {
-  if (!WHATSAPP_API_TOKEN || !WHATSAPP_BUSINESS_ACCOUNT_ID) {
-    console.error('❌ Credenciais do WhatsApp não configuradas');
-    return false;
-  }
-
-  return new Promise((resolve) => {
-    const data = JSON.stringify({
-      messaging_product: 'whatsapp',
-      to: recipientPhone,
-      type: 'text',
-      text: {
-        body: messageText,
-      },
-    });
-
-    const options = {
-      hostname: 'graph.instagram.com',
-      port: 443,
-      path: `/v18.0/${WHATSAPP_BUSINESS_ACCOUNT_ID}/messages`,
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${WHATSAPP_API_TOKEN}`,
-        'Content-Type': 'application/json',
-        'Content-Length': data.length,
-      },
-    };
-
-    const req = https.request(options, (res) => {
-      let responseData = '';
-
-      res.on('data', (chunk) => {
-        responseData += chunk;
-      });
-
-      res.on('end', () => {
-        try {
-          const result = JSON.parse(responseData);
-          if (result.messages?.[0]?.id) {
-            console.log(`✅ Mensagem enviada para ${recipientPhone}`);
-            resolve(true);
-          } else {
-            console.error('❌ Erro ao enviar:', result);
-            resolve(false);
-          }
-        } catch (error) {
-          console.error('❌ Erro ao processar resposta:', error);
-          resolve(false);
+  res.send(`
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Infinit Celulares - Chatbot IA</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
         }
-      });
-    });
+        .container {
+            width: 100%;
+            max-width: 600px;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            display: flex;
+            flex-direction: column;
+            height: 90vh;
+            max-height: 800px;
+        }
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 12px 12px 0 0;
+            text-align: center;
+        }
+        .header h1 { font-size: 24px; margin-bottom: 5px; }
+        .header p { font-size: 14px; opacity: 0.9; }
+        .chat-box {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .message {
+            margin-bottom: 15px;
+            display: flex;
+            animation: slideIn 0.3s ease-in-out;
+        }
+        @keyframes slideIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .message.user { justify-content: flex-end; }
+        .message.bot { justify-content: flex-start; }
+        .message-content {
+            max-width: 70%;
+            padding: 12px 16px;
+            border-radius: 12px;
+            word-wrap: break-word;
+            line-height: 1.4;
+        }
+        .message.user .message-content {
+            background: #667eea;
+            color: white;
+            border-bottom-right-radius: 4px;
+        }
+        .message.bot .message-content {
+            background: white;
+            color: #333;
+            border: 1px solid #ddd;
+            border-bottom-left-radius: 4px;
+        }
+        .input-area {
+            padding: 20px;
+            border-top: 1px solid #ddd;
+            background: white;
+            border-radius: 0 0 12px 12px;
+        }
+        .input-group {
+            display: flex;
+            gap: 10px;
+        }
+        input[type="text"] {
+            flex: 1;
+            padding: 12px 16px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            font-size: 14px;
+        }
+        input[type="text"]:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        button {
+            padding: 12px 20px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+        }
+        button:hover { background: #5568d3; }
+        .share-btn {
+            width: 100%;
+            padding: 12px;
+            background: #25d366;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            margin-top: 10px;
+            font-weight: 600;
+        }
+        .share-btn:hover { background: #1fb854; }
+        .info-text {
+            font-size: 12px;
+            color: #666;
+            margin-top: 10px;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🤖 Infinit Celulares</h1>
+            <p>Triagem Automática com IA</p>
+        </div>
 
-    req.on('error', (error) => {
-      console.error('❌ Erro na requisição:', error);
-      resolve(false);
-    });
+        <div class="chat-box" id="chatBox">
+            <div class="message bot">
+                <div class="message-content">
+                    👋 Olá! Bem-vindo à Infinit Celulares!<br><br>
+                    Sou um assistente de IA. Posso ajudar você a:<br>
+                    • 📱 Identificar o modelo do seu celular<br>
+                    • 🔍 Diagnosticar problemas<br>
+                    • 📋 Gerar um relatório<br><br>
+                    Descreva o problema do seu celular!
+                </div>
+            </div>
+        </div>
 
-    req.write(data);
-    req.end();
+        <div class="input-area">
+            <div class="input-group">
+                <input 
+                    type="text" 
+                    id="messageInput" 
+                    placeholder="Digite sua mensagem..."
+                    onkeypress="if(event.key==='Enter') sendMessage()"
+                >
+                <button onclick="sendMessage()">Enviar</button>
+            </div>
+
+            <button class="share-btn" id="shareBtn" onclick="shareViaWhatsApp()" disabled>
+                📱 Compartilhar via WhatsApp
+            </button>
+
+            <div class="info-text">
+                ⏰ Horário: 09:00 - 18:00 | 📞 (11) 99999-9999
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let lastResponse = '';
+
+        function addMessage(text, isUser = false) {
+            const chatBox = document.getElementById('chatBox');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = 'message ' + (isUser ? 'user' : 'bot');
+            messageDiv.innerHTML = '<div class="message-content">' + text + '</div>';
+            chatBox.appendChild(messageDiv);
+            chatBox.scrollTop = chatBox.scrollHeight;
+        }
+
+        async function sendMessage() {
+            const input = document.getElementById('messageInput');
+            const message = input.value.trim();
+
+            if (!message) return;
+
+            addMessage(message, true);
+            input.value = '';
+
+            try {
+                const response = await fetch('/api/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ message })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    lastResponse = data.response;
+                    addMessage(data.response, false);
+                    document.getElementById('shareBtn').disabled = false;
+                } else {
+                    addMessage('❌ Erro ao processar. Tente novamente!', false);
+                }
+            } catch (error) {
+                addMessage('❌ Erro de conexão!', false);
+                console.error('Erro:', error);
+            }
+        }
+
+        function shareViaWhatsApp() {
+            if (!lastResponse) return;
+            const text = encodeURIComponent(
+                '🤖 *Triagem Infinit Celulares*\\n\\n' + lastResponse + '\\n\\n📱 Infinit Celulares\\n⏰ 09:00 - 18:00\\n📞 (11) 99999-9999'
+            );
+            window.open('https://wa.me/?text=' + text, '_blank');
+        }
+    </script>
+</body>
+</html>
+  `);
+});
+
+// API para chat
+app.post('/api/chat', (req, res) => {
+  const { message } = req.body;
+
+  if (!message) {
+    return res.json({ success: false });
+  }
+
+  // Resposta simples da IA
+  let response = '';
+
+  if (message.toLowerCase().includes('não liga')) {
+    response = '📱 *Diagnóstico: Celular não liga*\\n\\n⚠️ Possíveis causas:\\n• Bateria descarregada\\n• Problema na placa\\n• Carregador com defeito\\n\\n🔴 Severidade: ALTA\\n\\n💡 Recomendação: Trazer para análise urgente!';
+  } else if (message.toLowerCase().includes('tela')) {
+    response = '📱 *Diagnóstico: Problema na tela*\\n\\n⚠️ Possíveis causas:\\n• Tela quebrada\\n• Conector solto\\n• Problema no LCD\\n\\n🟡 Severidade: MÉDIA\\n\\n💡 Recomendação: Pode ser consertado rapidamente!';
+  } else if (message.toLowerCase().includes('bateria')) {
+    response = '📱 *Diagnóstico: Problema na bateria*\\n\\n⚠️ Possíveis causas:\\n• Bateria desgastada\\n• Carregamento lento\\n• Descarrega rápido\\n\\n🟢 Severidade: BAIXA\\n\\n💡 Recomendação: Troca de bateria simples!';
+  } else {
+    response = '🤖 *Triagem Infinit Celulares*\\n\\n📝 Sua mensagem foi recebida!\\n\\n💡 Para melhor diagnóstico, descreva:\\n• Marca e modelo do celular\\n• Qual é o problema\\n• Quando começou\\n\\n📞 Ou ligue: (11) 99999-9999';
+  }
+
+  res.json({
+    success: true,
+    response: response
   });
-}
+});
 
-/**
- * Inicia servidor
- */
+// Health check
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
 app.listen(PORT, () => {
-  console.log(`\n🚀 Servidor Infinit Celulares rodando na porta ${PORT}`);
+  console.log(`🚀 Servidor rodando na porta ${PORT}`);
   console.log(`🌐 Acesse: http://localhost:${PORT}`);
-  console.log(`📍 Webhook: http://localhost:${PORT}/webhook`);
-  console.log(`💚 Health check: http://localhost:${PORT}/health\n`);
+});
