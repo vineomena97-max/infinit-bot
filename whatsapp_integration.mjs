@@ -1,21 +1,38 @@
 /**
+ * Servidor Web + Chatbot IA
  * Integração com WhatsApp Business API
- * Webhook para receber e processar mensagens
  */
 
 import express from 'express';
 import https from 'https';
-import { processMessage, isStoreOpen } from './infinit_whatsapp_chatbot.mjs';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import { processMessage, isStoreOpen } from './infinit_whatsapp_chatbot_corrigido.mjs';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
+app.use(express.static(__dirname));
 
 const WHATSAPP_BUSINESS_ACCOUNT_ID = process.env.WHATSAPP_BUSINESS_ACCOUNT_ID;
 const WHATSAPP_API_TOKEN = process.env.WHATSAPP_API_TOKEN;
 const WEBHOOK_VERIFY_TOKEN = process.env.WEBHOOK_VERIFY_TOKEN || 'infinit_celulares_2024';
 
+/**
+ * Serve a página principal
+ */
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'index.html'));
+});
+
+/**
+ * Webhook GET - Verificação do WhatsApp
+ */
 app.get('/webhook', (req, res) => {
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
@@ -29,6 +46,9 @@ app.get('/webhook', (req, res) => {
   }
 });
 
+/**
+ * Webhook POST - Receber mensagens do WhatsApp
+ */
 app.post('/webhook', async (req, res) => {
   const body = req.body;
 
@@ -40,17 +60,18 @@ app.post('/webhook', async (req, res) => {
     if (value?.messages) {
       const message = value.messages[0];
       const sender = message.from;
-      const messageId = message.id;
-      const timestamp = message.timestamp;
 
-      console.log(`📨 Mensagem recebida de ${sender} às ${new Date(timestamp * 1000).toLocaleString('pt-BR')}`);
+      console.log(`📨 Mensagem recebida de ${sender}`);
 
       if (message.type === 'text') {
-        await handleTextMessage(sender, message.text.body, messageId);
+        const response = await processMessage(message.text.body);
+        await sendWhatsAppMessage(sender, response);
       } else if (message.type === 'image') {
-        await handleImageMessage(sender, message.image.link, message.image.caption, messageId);
-      } else if (message.type === 'document') {
-        await handleDocumentMessage(sender, message.document.link, messageId);
+        const response = await processMessage(
+          message.image.caption || 'Analisando imagem do celular',
+          message.image.link
+        );
+        await sendWhatsAppMessage(sender, response);
       }
     }
 
@@ -60,43 +81,75 @@ app.post('/webhook', async (req, res) => {
   }
 });
 
-async function handleTextMessage(sender, text, messageId) {
-  console.log(`💬 Texto: "${text}"`);
+/**
+ * API para chat web
+ */
+app.post('/api/chat', async (req, res) => {
+  try {
+    const { message } = req.body;
 
-  if (text.toLowerCase().includes('agendar')) {
-    await sendMessage(sender, '📅 Para agendar um atendimento, por favor forneça:\n1. Seu nome\n2. Horário preferido\n3. Descrição do problema');
-    return;
+    if (!message) {
+      return res.json({ success: false, error: 'Mensagem vazia' });
+    }
+
+    const response = await processMessage(message);
+
+    res.json({
+      success: true,
+      response: response
+    });
+  } catch (error) {
+    console.error('Erro no chat:', error);
+    res.json({
+      success: false,
+      error: 'Erro ao processar mensagem'
+    });
   }
+});
 
-  if (text.toLowerCase().includes('atendente')) {
-    await sendMessage(sender, '👨‍💼 Um atendente humano entrará em contato em breve. Obrigado pela paciência!');
-    return;
+/**
+ * API para análise de imagem
+ */
+app.post('/api/analyze-image', async (req, res) => {
+  try {
+    // Como estamos em ambiente web, vamos processar como descrição
+    const response = await processMessage('Analisando imagem do celular para identificação de modelo e problemas');
+
+    res.json({
+      success: true,
+      response: response
+    });
+  } catch (error) {
+    console.error('Erro ao analisar imagem:', error);
+    res.json({
+      success: false,
+      error: 'Erro ao analisar imagem'
+    });
   }
+});
 
-  const response = await processMessage(text);
-  await sendMessage(sender, response);
-}
+/**
+ * Health check
+ */
+app.get('/health', (req, res) => {
+  res.json({
+    status: 'ok',
+    store: 'Infinit Celulares',
+    storeOpen: isStoreOpen(),
+    timestamp: new Date().toISOString(),
+  });
+});
 
-async function handleImageMessage(sender, imageUrl, caption, messageId) {
-  console.log(`📸 Imagem recebida: ${imageUrl}`);
-  console.log(`📝 Legenda: ${caption || '(sem legenda)'}`);
-
-  const response = await processMessage(caption || 'Analisando a imagem do celular', imageUrl);
-  await sendMessage(sender, response);
-}
-
-async function handleDocumentMessage(sender, documentUrl, messageId) {
-  console.log(`📄 Documento recebido: ${documentUrl}`);
-  await sendMessage(sender, '📄 Recebemos seu documento. Um atendente analisará em breve.');
-}
-
-async function sendMessage(recipientPhone, messageText) {
+/**
+ * Envia mensagem via WhatsApp Business API
+ */
+async function sendWhatsAppMessage(recipientPhone, messageText) {
   if (!WHATSAPP_API_TOKEN || !WHATSAPP_BUSINESS_ACCOUNT_ID) {
     console.error('❌ Credenciais do WhatsApp não configuradas');
-    return;
+    return false;
   }
 
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve) => {
     const data = JSON.stringify({
       messaging_product: 'whatsapp',
       to: recipientPhone,
@@ -132,7 +185,7 @@ async function sendMessage(recipientPhone, messageText) {
             console.log(`✅ Mensagem enviada para ${recipientPhone}`);
             resolve(true);
           } else {
-            console.error('❌ Erro ao enviar mensagem:', result);
+            console.error('❌ Erro ao enviar:', result);
             resolve(false);
           }
         } catch (error) {
@@ -144,7 +197,7 @@ async function sendMessage(recipientPhone, messageText) {
 
     req.on('error', (error) => {
       console.error('❌ Erro na requisição:', error);
-      reject(error);
+      resolve(false);
     });
 
     req.write(data);
@@ -152,19 +205,11 @@ async function sendMessage(recipientPhone, messageText) {
   });
 }
 
-app.get('/health', (req, res) => {
-  res.json({
-    status: 'ok',
-    store: 'Infinit Celulares',
-    storeOpen: isStoreOpen(),
-    timestamp: new Date().toISOString(),
-  });
-});
-
+/**
+ * Inicia servidor
+ */
 app.listen(PORT, () => {
-  console.log(`\n🚀 Servidor WhatsApp Bot rodando na porta ${PORT}`);
+  console.log(`\n🚀 Servidor Infinit Celulares rodando na porta ${PORT}`);
+  console.log(`🌐 Acesse: http://localhost:${PORT}`);
   console.log(`📍 Webhook: http://localhost:${PORT}/webhook`);
   console.log(`💚 Health check: http://localhost:${PORT}/health\n`);
-});
-
-export { sendMessage, handleTextMessage, handleImageMessage };
