@@ -1,0 +1,29 @@
+{
+  "name": "infinit-celulares-whatsapp-bot",
+  "version": "1.0.0",
+  "description": "Chatbot IA para WhatsApp Business - Infinit Celulares",
+  "type": "module",
+  "main": "whatsapp_integration.mjs",
+  "scripts": {
+    "start": "node whatsapp_integration.mjs",
+    "dev": "node --watch whatsapp_integration.mjs",
+    "test": "node infinit_whatsapp_chatbot.mjs"
+  },
+  "keywords": [
+    "whatsapp",
+    "chatbot",
+    "ai",
+    "phone-repair",
+    "triagem"
+  ],
+  "author": "Infinit Celulares",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.21.2",
+    "node-fetch": "^3.4.0",
+    "dotenv": "^17.2.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
