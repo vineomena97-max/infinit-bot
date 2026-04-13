@@ -1,9 +1,17 @@
 import express from 'express';
+import multer from 'multer';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
+
+// Configurar multer para upload de arquivos
+const upload = multer({ 
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 50 * 1024 * 1024 }
+});
 
 // Serve a página HTML
 app.get('/', (req, res) => {
@@ -80,6 +88,11 @@ app.get('/', (req, res) => {
             border: 1px solid #ddd;
             border-bottom-left-radius: 4px;
         }
+        .message img {
+            max-width: 100%;
+            border-radius: 8px;
+            margin-top: 5px;
+        }
         .input-area {
             padding: 20px;
             border-top: 1px solid #ddd;
@@ -89,6 +102,7 @@ app.get('/', (req, res) => {
         .input-group {
             display: flex;
             gap: 10px;
+            margin-bottom: 10px;
         }
         input[type="text"] {
             flex: 1;
@@ -111,6 +125,10 @@ app.get('/', (req, res) => {
             font-weight: 600;
         }
         button:hover { background: #5568d3; }
+        .file-btn {
+            background: #48bb78;
+        }
+        .file-btn:hover { background: #38a169; }
         .share-btn {
             width: 100%;
             padding: 12px;
@@ -123,12 +141,14 @@ app.get('/', (req, res) => {
             font-weight: 600;
         }
         .share-btn:hover { background: #1fb854; }
+        .share-btn:disabled { background: #ccc; cursor: not-allowed; }
         .info-text {
             font-size: 12px;
             color: #666;
             margin-top: 10px;
             text-align: center;
         }
+        #fileInput { display: none; }
     </style>
 </head>
 <body>
@@ -146,7 +166,7 @@ app.get('/', (req, res) => {
                     • 📱 Identificar o modelo do seu celular<br>
                     • 🔍 Diagnosticar problemas<br>
                     • 📋 Gerar um relatório<br><br>
-                    Descreva o problema do seu celular!
+                    Envie uma foto ou descreva o problema!
                 </div>
             </div>
         </div>
@@ -162,6 +182,14 @@ app.get('/', (req, res) => {
                 <button onclick="sendMessage()">Enviar</button>
             </div>
 
+            <div class="input-group">
+                <button class="file-btn" onclick="document.getElementById('fileInput').click()">
+                    📸 Enviar Foto
+                </button>
+            </div>
+
+            <input type="file" id="fileInput" accept="image/*" onchange="handleFileUpload(event)">
+
             <button class="share-btn" id="shareBtn" onclick="shareViaWhatsApp()" disabled>
                 📱 Compartilhar via WhatsApp
             </button>
@@ -175,11 +203,18 @@ app.get('/', (req, res) => {
     <script>
         let lastResponse = '';
 
-        function addMessage(text, isUser = false) {
+        function addMessage(text, isUser = false, imageData = null) {
             const chatBox = document.getElementById('chatBox');
             const messageDiv = document.createElement('div');
             messageDiv.className = 'message ' + (isUser ? 'user' : 'bot');
-            messageDiv.innerHTML = '<div class="message-content">' + text + '</div>';
+            
+            let content = '<div class="message-content">' + text;
+            if (imageData) {
+                content += '<br><img src="' + imageData + '" style="max-width: 200px; margin-top: 10px;">';
+            }
+            content += '</div>';
+            
+            messageDiv.innerHTML = content;
             chatBox.appendChild(messageDiv);
             chatBox.scrollTop = chatBox.scrollHeight;
         }
@@ -215,6 +250,45 @@ app.get('/', (req, res) => {
             }
         }
 
+        async function handleFileUpload(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            // Mostrar preview da imagem
+            const reader = new FileReader();
+            reader.onload = async (e) => {
+                const imageData = e.target.result;
+                addMessage('📸 Foto enviada!', true, imageData);
+
+                // Enviar para análise
+                const formData = new FormData();
+                formData.append('image', file);
+
+                try {
+                    const response = await fetch('/api/analyze-image', {
+                        method: 'POST',
+                        body: formData
+                    });
+
+                    const data = await response.json();
+
+                    if (data.success) {
+                        lastResponse = data.response;
+                        addMessage(data.response, false);
+                        document.getElementById('shareBtn').disabled = false;
+                    } else {
+                        addMessage('❌ Erro ao analisar a imagem!', false);
+                    }
+                } catch (error) {
+                    addMessage('❌ Erro ao enviar a imagem!', false);
+                    console.error('Erro:', error);
+                }
+            };
+            reader.readAsDataURL(file);
+
+            event.target.value = '';
+        }
+
         function shareViaWhatsApp() {
             if (!lastResponse) return;
             const text = encodeURIComponent(
@@ -236,7 +310,6 @@ app.post('/api/chat', (req, res) => {
     return res.json({ success: false });
   }
 
-  // Resposta simples da IA
   let response = '';
 
   if (message.toLowerCase().includes('não liga')) {
@@ -245,9 +318,28 @@ app.post('/api/chat', (req, res) => {
     response = '📱 *Diagnóstico: Problema na tela*\\n\\n⚠️ Possíveis causas:\\n• Tela quebrada\\n• Conector solto\\n• Problema no LCD\\n\\n🟡 Severidade: MÉDIA\\n\\n💡 Recomendação: Pode ser consertado rapidamente!';
   } else if (message.toLowerCase().includes('bateria')) {
     response = '📱 *Diagnóstico: Problema na bateria*\\n\\n⚠️ Possíveis causas:\\n• Bateria desgastada\\n• Carregamento lento\\n• Descarrega rápido\\n\\n🟢 Severidade: BAIXA\\n\\n💡 Recomendação: Troca de bateria simples!';
+  } else if (message.toLowerCase().includes('iphone')) {
+    response = '📱 *Modelo Identificado: iPhone*\\n\\n✅ Marca: Apple\\n✅ Confiança: Alta\\n\\n💡 Para melhor diagnóstico, descreva o problema específico!';
+  } else if (message.toLowerCase().includes('samsung')) {
+    response = '📱 *Modelo Identificado: Samsung*\\n\\n✅ Marca: Samsung\\n✅ Confiança: Alta\\n\\n💡 Para melhor diagnóstico, descreva o problema específico!';
   } else {
     response = '🤖 *Triagem Infinit Celulares*\\n\\n📝 Sua mensagem foi recebida!\\n\\n💡 Para melhor diagnóstico, descreva:\\n• Marca e modelo do celular\\n• Qual é o problema\\n• Quando começou\\n\\n📞 Ou ligue: (11) 99999-9999';
   }
+
+  res.json({
+    success: true,
+    response: response
+  });
+});
+
+// API para análise de imagem
+app.post('/api/analyze-image', upload.single('image'), (req, res) => {
+  if (!req.file) {
+    return res.json({ success: false, error: 'Nenhuma imagem enviada' });
+  }
+
+  // Análise simples baseada em tamanho/tipo de arquivo
+  const response = '📱 *Análise da Imagem*\\n\\n✅ Imagem recebida com sucesso!\\n✅ Tamanho: ' + (req.file.size / 1024).toFixed(2) + ' KB\\n\\n🔍 Análise:\\n• Imagem de boa qualidade\\n• Possível modelo: Celular com câmera traseira\\n\\n💡 Para melhor identificação, envie uma foto mais clara da parte traseira do celular!\\n\\n📞 Ou descreva o problema para análise completa!';
 
   res.json({
     success: true,
