@@ -1,5 +1,6 @@
 import express from 'express';
 import multer from 'multer';
+import https from 'https';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -7,13 +8,163 @@ const PORT = process.env.PORT || 3000;
 app.use(express.json());
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
-// Configurar multer para upload de arquivos
 const upload = multer({ 
   storage: multer.memoryStorage(),
   limits: { fileSize: 50 * 1024 * 1024 }
 });
 
-// Serve a página HTML
+// Função para chamar a IA Manus (gratuita)
+async function callMausAI(prompt) {
+  return new Promise((resolve) => {
+    const data = JSON.stringify({
+      messages: [
+        {
+          role: 'system',
+          content: `Você é um assistente de triagem de celulares para a loja Infinit Celulares. 
+Você deve:
+1. Identificar o modelo do celular (marca, linha, modelo)
+2. Diagnosticar os problemas descritos
+3. Classificar a severidade (BAIXA, MÉDIA, ALTA)
+4. Dar recomendações profissionais
+5. Ser conciso e direto
+
+Responda sempre no formato:
+📱 MODELO: [marca e modelo]
+⚠️ PROBLEMAS IDENTIFICADOS:
+• [problema 1]
+• [problema 2]
+
+🔴/🟡/🟢 SEVERIDADE: [ALTA/MÉDIA/BAIXA]
+
+💡 RECOMENDAÇÃO: [recomendação]`
+        },
+        {
+          role: 'user',
+          content: prompt
+        }
+      ]
+    });
+
+    const options = {
+      hostname: 'api.manus.im',
+      port: 443,
+      path: '/v1/chat/completions',
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${process.env.MANUS_API_KEY || 'demo'}`,
+        'Content-Type': 'application/json',
+        'Content-Length': data.length,
+      },
+    };
+
+    const req = https.request(options, (res) => {
+      let responseData = '';
+
+      res.on('data', (chunk) => {
+        responseData += chunk;
+      });
+
+      res.on('end', () => {
+        try {
+          const result = JSON.parse(responseData);
+          const message = result.choices?.[0]?.message?.content || 'Erro ao processar resposta';
+          resolve(message);
+        } catch (error) {
+          resolve(getLocalResponse(prompt));
+        }
+      });
+    });
+
+    req.on('error', (error) => {
+      console.error('Erro na IA:', error);
+      resolve(getLocalResponse(prompt));
+    });
+
+    req.write(data);
+    req.end();
+  });
+}
+
+// Função de fallback com IA local simples
+function getLocalResponse(message) {
+  const msg = message.toLowerCase();
+  
+  // Análise de palavras-chave para diagnóstico
+  const problems = [];
+  const keywords = {
+    'não liga': { problem: 'Celular não liga', severity: 'ALTA' },
+    'não carrega': { problem: 'Não carrega', severity: 'ALTA' },
+    'tela quebrada': { problem: 'Tela quebrada', severity: 'MÉDIA' },
+    'tela trincada': { problem: 'Tela trincada', severity: 'MÉDIA' },
+    'tela preta': { problem: 'Tela preta/sem imagem', severity: 'ALTA' },
+    'bateria': { problem: 'Problema na bateria', severity: 'BAIXA' },
+    'descarrega rápido': { problem: 'Bateria descarrega rápido', severity: 'MÉDIA' },
+    'travado': { problem: 'Celular travado', severity: 'MÉDIA' },
+    'lento': { problem: 'Celular lento', severity: 'BAIXA' },
+    'quente': { problem: 'Celular esquentando', severity: 'MÉDIA' },
+    'molhado': { problem: 'Dano por água', severity: 'ALTA' },
+    'câmera': { problem: 'Problema na câmera', severity: 'BAIXA' },
+    'áudio': { problem: 'Problema de áudio', severity: 'BAIXA' },
+    'microfone': { problem: 'Microfone com defeito', severity: 'BAIXA' },
+    'conectividade': { problem: 'Problema de conectividade', severity: 'MÉDIA' },
+    'wifi': { problem: 'WiFi não funciona', severity: 'BAIXA' },
+    'bluetooth': { problem: 'Bluetooth com defeito', severity: 'BAIXA' },
+  };
+
+  let maxSeverity = 'BAIXA';
+  const severityOrder = { 'BAIXA': 1, 'MÉDIA': 2, 'ALTA': 3 };
+
+  for (const [keyword, data] of Object.entries(keywords)) {
+    if (msg.includes(keyword)) {
+      problems.push(data.problem);
+      if (severityOrder[data.severity] > severityOrder[maxSeverity]) {
+        maxSeverity = data.severity;
+      }
+    }
+  }
+
+  // Identificar marca
+  let brand = 'Desconhecido';
+  if (msg.includes('iphone') || msg.includes('apple')) brand = 'iPhone';
+  else if (msg.includes('samsung')) brand = 'Samsung';
+  else if (msg.includes('xiaomi')) brand = 'Xiaomi';
+  else if (msg.includes('motorola') || msg.includes('moto')) brand = 'Motorola';
+  else if (msg.includes('lg')) brand = 'LG';
+  else if (msg.includes('huawei')) brand = 'Huawei';
+  else if (msg.includes('nokia')) brand = 'Nokia';
+  else if (msg.includes('sony')) brand = 'Sony';
+
+  let response = `📱 TRIAGEM INFINIT CELULARES\n\n`;
+
+  if (brand !== 'Desconhecido') {
+    response += `✅ MARCA IDENTIFICADA: ${brand}\n\n`;
+  }
+
+  if (problems.length > 0) {
+    response += `⚠️ PROBLEMAS IDENTIFICADOS:\n`;
+    problems.forEach(p => response += `• ${p}\n`);
+    response += `\n`;
+    
+    const severityEmoji = maxSeverity === 'ALTA' ? '🔴' : maxSeverity === 'MÉDIA' ? '🟡' : '🟢';
+    response += `${severityEmoji} SEVERIDADE: ${maxSeverity}\n\n`;
+  } else {
+    response += `📝 Descrição recebida\n\n`;
+  }
+
+  response += `💡 RECOMENDAÇÃO:\n`;
+  if (maxSeverity === 'ALTA') {
+    response += `Trazer o celular para análise URGENTE!`;
+  } else if (maxSeverity === 'MÉDIA') {
+    response += `Pode ser consertado em poucas horas.`;
+  } else {
+    response += `Problema simples, rápido de resolver!`;
+  }
+
+  response += `\n\n📞 Ligue: (11) 99999-9999\n⏰ Horário: 09:00 - 18:00`;
+
+  return response;
+}
+
 app.get('/', (req, res) => {
   res.send(`
 <!DOCTYPE html>
@@ -75,7 +226,9 @@ app.get('/', (req, res) => {
             padding: 12px 16px;
             border-radius: 12px;
             word-wrap: break-word;
-            line-height: 1.4;
+            line-height: 1.6;
+            white-space: pre-wrap;
+            font-size: 14px;
         }
         .message.user .message-content {
             background: #667eea;
@@ -160,14 +313,14 @@ app.get('/', (req, res) => {
 
         <div class="chat-box" id="chatBox">
             <div class="message bot">
-                <div class="message-content">
-                    👋 Olá! Bem-vindo à Infinit Celulares!<br><br>
-                    Sou um assistente de IA. Posso ajudar você a:<br>
-                    • 📱 Identificar o modelo do seu celular<br>
-                    • 🔍 Diagnosticar problemas<br>
-                    • 📋 Gerar um relatório<br><br>
-                    Envie uma foto ou descreva o problema!
-                </div>
+                <div class="message-content">👋 Olá! Bem-vindo à Infinit Celulares!
+
+Sou um assistente de IA inteligente. Posso ajudar você a:
+• 📱 Identificar o modelo do seu celular
+• 🔍 Diagnosticar problemas
+• 📋 Gerar um relatório de triagem
+
+Descreva o problema do seu celular!</div>
             </div>
         </div>
 
@@ -176,7 +329,7 @@ app.get('/', (req, res) => {
                 <input 
                     type="text" 
                     id="messageInput" 
-                    placeholder="Digite sua mensagem..."
+                    placeholder="Ex: iPhone 11 com tela quebrada..."
                     onkeypress="if(event.key==='Enter') sendMessage()"
                 >
                 <button onclick="sendMessage()">Enviar</button>
@@ -254,13 +407,11 @@ app.get('/', (req, res) => {
             const file = event.target.files[0];
             if (!file) return;
 
-            // Mostrar preview da imagem
             const reader = new FileReader();
             reader.onload = async (e) => {
                 const imageData = e.target.result;
                 addMessage('📸 Foto enviada!', true, imageData);
 
-                // Enviar para análise
                 const formData = new FormData();
                 formData.append('image', file);
 
@@ -291,9 +442,7 @@ app.get('/', (req, res) => {
 
         function shareViaWhatsApp() {
             if (!lastResponse) return;
-            const text = encodeURIComponent(
-                '🤖 *Triagem Infinit Celulares*\\n\\n' + lastResponse + '\\n\\n📱 Infinit Celulares\\n⏰ 09:00 - 18:00\\n📞 (11) 99999-9999'
-            );
+            const text = encodeURIComponent(lastResponse);
             window.open('https://wa.me/?text=' + text, '_blank');
         }
     </script>
@@ -302,29 +451,15 @@ app.get('/', (req, res) => {
   `);
 });
 
-// API para chat
-app.post('/api/chat', (req, res) => {
+app.post('/api/chat', async (req, res) => {
   const { message } = req.body;
 
   if (!message) {
     return res.json({ success: false });
   }
 
-  let response = '';
-
-  if (message.toLowerCase().includes('não liga')) {
-    response = '📱 *Diagnóstico: Celular não liga*\\n\\n⚠️ Possíveis causas:\\n• Bateria descarregada\\n• Problema na placa\\n• Carregador com defeito\\n\\n🔴 Severidade: ALTA\\n\\n💡 Recomendação: Trazer para análise urgente!';
-  } else if (message.toLowerCase().includes('tela')) {
-    response = '📱 *Diagnóstico: Problema na tela*\\n\\n⚠️ Possíveis causas:\\n• Tela quebrada\\n• Conector solto\\n• Problema no LCD\\n\\n🟡 Severidade: MÉDIA\\n\\n💡 Recomendação: Pode ser consertado rapidamente!';
-  } else if (message.toLowerCase().includes('bateria')) {
-    response = '📱 *Diagnóstico: Problema na bateria*\\n\\n⚠️ Possíveis causas:\\n• Bateria desgastada\\n• Carregamento lento\\n• Descarrega rápido\\n\\n🟢 Severidade: BAIXA\\n\\n💡 Recomendação: Troca de bateria simples!';
-  } else if (message.toLowerCase().includes('iphone')) {
-    response = '📱 *Modelo Identificado: iPhone*\\n\\n✅ Marca: Apple\\n✅ Confiança: Alta\\n\\n💡 Para melhor diagnóstico, descreva o problema específico!';
-  } else if (message.toLowerCase().includes('samsung')) {
-    response = '📱 *Modelo Identificado: Samsung*\\n\\n✅ Marca: Samsung\\n✅ Confiança: Alta\\n\\n💡 Para melhor diagnóstico, descreva o problema específico!';
-  } else {
-    response = '🤖 *Triagem Infinit Celulares*\\n\\n📝 Sua mensagem foi recebida!\\n\\n💡 Para melhor diagnóstico, descreva:\\n• Marca e modelo do celular\\n• Qual é o problema\\n• Quando começou\\n\\n📞 Ou ligue: (11) 99999-9999';
-  }
+  // Tentar usar IA Manus, se falhar usa local
+  const response = await callMausAI(message);
 
   res.json({
     success: true,
@@ -332,14 +467,19 @@ app.post('/api/chat', (req, res) => {
   });
 });
 
-// API para análise de imagem
-app.post('/api/analyze-image', upload.single('image'), (req, res) => {
+app.post('/api/analyze-image', upload.single('image'), async (req, res) => {
   if (!req.file) {
     return res.json({ success: false, error: 'Nenhuma imagem enviada' });
   }
 
-  // Análise simples baseada em tamanho/tipo de arquivo
-  const response = '📱 *Análise da Imagem*\\n\\n✅ Imagem recebida com sucesso!\\n✅ Tamanho: ' + (req.file.size / 1024).toFixed(2) + ' KB\\n\\n🔍 Análise:\\n• Imagem de boa qualidade\\n• Possível modelo: Celular com câmera traseira\\n\\n💡 Para melhor identificação, envie uma foto mais clara da parte traseira do celular!\\n\\n📞 Ou descreva o problema para análise completa!';
+  const prompt = `Analise esta imagem de um celular e identifique:
+1. Marca e modelo (se possível)
+2. Possíveis problemas visíveis
+3. Severidade do dano
+
+Seja conciso e profissional.`;
+
+  const response = await callMausAI(prompt);
 
   res.json({
     success: true,
@@ -347,7 +487,6 @@ app.post('/api/analyze-image', upload.single('image'), (req, res) => {
   });
 });
 
-// Health check
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
