@@ -4,6 +4,7 @@
  */
 
 import express from 'express';
+import https from 'https';
 import { processMessage, isStoreOpen } from './infinit_whatsapp_chatbot.mjs';
 
 const app = express();
@@ -95,36 +96,60 @@ async function sendMessage(recipientPhone, messageText) {
     return;
   }
 
-  try {
-    const response = await fetch(
-      `https://graph.instagram.com/v18.0/${WHATSAPP_BUSINESS_ACCOUNT_ID}/messages`,
-      {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${WHATSAPP_API_TOKEN}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          messaging_product: 'whatsapp',
-          to: recipientPhone,
-          type: 'text',
-          text: {
-            body: messageText,
-          },
-        } ),
-      }
-    );
+  return new Promise((resolve, reject) => {
+    const data = JSON.stringify({
+      messaging_product: 'whatsapp',
+      to: recipientPhone,
+      type: 'text',
+      text: {
+        body: messageText,
+      },
+    });
 
-    const data = await response.json();
+    const options = {
+      hostname: 'graph.instagram.com',
+      port: 443,
+      path: `/v18.0/${WHATSAPP_BUSINESS_ACCOUNT_ID}/messages`,
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${WHATSAPP_API_TOKEN}`,
+        'Content-Type': 'application/json',
+        'Content-Length': data.length,
+      },
+    };
 
-    if (data.messages?.[0]?.id) {
-      console.log(`✅ Mensagem enviada para ${recipientPhone}`);
-    } else {
-      console.error('❌ Erro ao enviar mensagem:', data);
-    }
-  } catch (error) {
-    console.error('❌ Erro na requisição:', error);
-  }
+    const req = https.request(options, (res) => {
+      let responseData = '';
+
+      res.on('data', (chunk) => {
+        responseData += chunk;
+      });
+
+      res.on('end', () => {
+        try {
+          const result = JSON.parse(responseData);
+          if (result.messages?.[0]?.id) {
+            console.log(`✅ Mensagem enviada para ${recipientPhone}`);
+            resolve(true);
+          } else {
+            console.error('❌ Erro ao enviar mensagem:', result);
+            resolve(false);
+          }
+        } catch (error) {
+          console.error('❌ Erro ao processar resposta:', error);
+          resolve(false);
+        }
+      });
+    });
+
+    req.on('error', (error) => {
+      console.error('❌ Erro na requisição:', error);
+      reject(error);
+    });
+
+    req.write(data);
+    req.end();
+  });
 }
 
 app.get('/health', (req, res) => {
@@ -138,8 +163,8 @@ app.get('/health', (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`\n🚀 Servidor WhatsApp Bot rodando na porta ${PORT}`);
-  console.log(`📍 Webhook: http://localhost:${PORT}/webhook` );
-  console.log(`💚 Health check: http://localhost:${PORT}/health\n` );
+  console.log(`📍 Webhook: http://localhost:${PORT}/webhook`);
+  console.log(`💚 Health check: http://localhost:${PORT}/health\n`);
 });
 
 export { sendMessage, handleTextMessage, handleImageMessage };
